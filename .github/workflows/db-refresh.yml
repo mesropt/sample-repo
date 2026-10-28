@@ -1,0 +1,105 @@
+name: Refresh non-prod DB from prod snapshot (mock)
+
+# Mock workflow to see how a manual approval via GitHub Environment looks in the UI. No cloud calls.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Non-prod database to refresh from its prod snapshot
+        required: true
+        type: choice
+        options:
+          - sample-dev-db
+          - sample-test-db
+      confirm:
+        description: Type the selected database identifier to confirm it will be deleted and restored from prod snapshot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check workflow is run from main
+        if: github.ref != 'refs/heads/main'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          echo "::error::Workflow was run from $BRANCH, database was not refreshed. Run it from main"; exit 1
+
+      - name: Check confirmation
+        env:
+          TARGET: ${{ inputs.target }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "$TARGET" ]; then
+            echo "::error::Confirmation does not match $TARGET, database was not refreshed"; exit 1
+          fi
+
+      - name: Plan (mock)
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          cat > plan.txt <<EOF
+          The following actions will be performed:
+
+            # database.$TARGET will be replaced, as requested
+          -/+ database "$TARGET" {
+                ~ id       = "old-id" -> (known after apply)
+                  name     = "$TARGET"
+                ~ snapshot = null -> "sample-prod-db-snapshot-2026-10-28"
+              }
+
+          Plan: 1 to add, 0 to change, 1 to destroy.
+          EOF
+
+      - name: Auto-verify plan before manual approval (mock)
+        run: echo "Plan consists only of delete+create of the selected database, snapshot is of the expected prod database"
+
+      - name: Show plan and prod snapshot for manual approval
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          {
+            echo "### Refresh $TARGET"
+            echo "Prod snapshot: \`sample-prod-db-snapshot-2026-10-28\`"
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-artifact
+          path: plan.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  apply-job:
+    needs: plan-job
+    runs-on: ubuntu-latest
+    # Waits for manual approval by the required reviewers of this environment before any step runs
+    environment: db-refresh-manual-approval
+    steps:
+      - name: Download approved plan
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-artifact
+
+      - name: Remove deletion protection (mock)
+        env:
+          TARGET: ${{ inputs.target }}
+        run: echo "MOCK remove deletion protection of $TARGET"
+
+      - name: Execute approved plan (mock)
+        run: |
+          echo "MOCK apply plan"
+          cat plan.txt
+
+      - name: Verify restored database matches its config (mock)
+        run: echo "MOCK verify, no changes"
